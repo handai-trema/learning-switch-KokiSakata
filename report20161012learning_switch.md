@@ -15,12 +15,12 @@
 ### コード解説
 この節では、multi_learning_switch.rbの各ハンドラを説明する。
 * startメソッド
-‘‘‘ruby
+'''ruby
   def start(_argv)
     @fdbs = {}
     logger.info "#{name} started."
   end
-‘‘‘
+'''
 
 * switch_readyメソッド
 
