@@ -13,6 +13,25 @@
 ## 解答
 
 ### コード解説
+multi_learning_switch.rbの
+* startメソッド
+'''ruby
+  def start(_argv)
+    @fdbs = {}
+    logger.info "#{name} started."
+  end
+'''
 
+* switch_readyメソッド
+
+* packet_inメソッド
+
+* age_fdbsメソッド
+
+* flow_mod_and_packet_outメソッド
+
+* flow_modメソッド
+
+* packet_outメソッド
 
 ### 動作確認
