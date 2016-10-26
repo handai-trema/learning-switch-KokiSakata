@@ -1,128 +1,63 @@
-# 情報ネットワーク学演習Ⅱ 10/12 レポート課題
+# 情報ネットワーク学演習Ⅱ 10/19 レポート課題
+## 課題内容 (マルチプルテーブルを読む)
 
-## 課題内容 (複数スイッチ対応版 ラーニングスイッチ)
+OpenFlow1.3 版スイッチの動作を説明しよう。
 
-複数スイッチに対応したラーニングスイッチ (multi_learning_switch.rb) の動作を説明しよう。
+スイッチ動作の各ステップについて、trema dump_flows の出力 (マルチプルテーブルの内容) を混じえながら動作を説明すること。
 
-* 複数スイッチの FDB をどのように実現しているか、コードと動作を解説する
-* 動作の様子やフローテーブルの内容もステップごとに確認すること
-* 必要に応じて図解すること
+### 実行のしかた
 
-![](multi_learning_switch.jpeg)
+以下のように `--openflow13` オプションが必要です。
+
+``` shellsession
+$ bundle exec trema run lib/learning_switch13.rb --openflow13 -c trema.conf
+```
 
 ## 解答
 
-### コード解説
-この節では、multi_learning_switch.rbの各メソッドを説明する。
+今回、以下の4つのステップでtrema dump_flowsを実行し、マルチプルテーブルの内容を参照する。
+1. 初期状態
+2. host1からhost2にパケットを送信
+3. host2からhost1にパケットを送信
+4. 再びhost1からhost2にパケットを送信
+このようにして、ポート番号がホストのMACアドレスがFDBに登録され、パケットの宛先ポートがスイッチのフローエントリに登録され、それを用いてコントローラを用いずにパケットを転送する、という流れを確認する。
 
-* startメソッド
-```ruby
-  def start(_argv)
-    @fdbs = {}
-    logger.info "#{name} started."
-  end
+### 1. 初期状態
 ```
-初めにFDB（フォワーディングデータベース）を初期化しプログラムが開始したことを出力する。
+cookie=0x0, duration=36.164s, table=0, n_packets=0, n_bytes=0, priority=2,dl_dst=01:00:00:00:00:00/ff:00:00:00:00:00 actions=drop
+cookie=0x0, duration=36.127s, table=0, n_packets=0, n_bytes=0, priority=2,dl_dst=33:33:00:00:00:00/ff:ff:00:00:00:00 actions=drop
+cookie=0x0, duration=36.127s, table=0, n_packets=0, n_bytes=0, priority=1 actions=goto_table:1
+cookie=0x0, duration=36.127s, table=1, n_packets=0, n_bytes=0, priority=3,dl_dst=ff:ff:ff:ff:ff:ff actions=FLOOD
+cookie=0x0, duration=36.127s, table=1, n_packets=0, n_bytes=0, priority=1 actions=CONTROLLER:65535
 
-* switch_readyメソッド
-```ruby
-  def switch_ready(datapath_id)
-    @fdbs[datapath_id] = FDB.new
-  end
 ```
-起動してきたスイッチに対してそれぞれdatapath_idをキーとしてFDBのインスタンスを生成する。
-
-* packet_inメソッド
-```ruby
-  def packet_in(datapath_id, packet_in)
-    return if packet_in.destination_mac.reserved?
-    @fdbs.fetch(datapath_id).learn(packet_in.source_mac, packet_in.in_port)
-    flow_mod_and_packet_out packet_in
-  end
+### 2. host1からhost2にパケットを送信
 ```
-初めに、未知のパケットでなければ、その時点で終了してパケットを破棄している。
-未知のパケットであれば、そのパケットが届いたスイッチのFDBにパケットの送信元MACアドレスとポート番号を登録し、パケットを宛先のポートに出力するかフラッディングする。
-
-* age_fdbsメソッド
-```ruby
-  def age_fdbs
-    @fdbs.each_value(&:age)
-  end
+cookie=0x0, duration=120.016s, table=0, n_packets=0, n_bytes=0, priority=2,dl_dst=01:00:00:00:00:00/ff:00:00:00:00:00 actions=drop
+cookie=0x0, duration=119.979s, table=0, n_packets=0, n_bytes=0, priority=2,dl_dst=33:33:00:00:00:00/ff:ff:00:00:00:00 actions=drop
+cookie=0x0, duration=119.979s, table=0, n_packets=1, n_bytes=42, priority=1 actions=goto_table:1
+cookie=0x0, duration=119.979s, table=1, n_packets=0, n_bytes=0, priority=3,dl_dst=ff:ff:ff:ff:ff:ff actions=FLOOD
+cookie=0x0, duration=119.979s, table=1, n_packets=1, n_bytes=42, priority=1 actions=CONTROLLER:65535
 ```
-このメソッドは5秒毎に実行され、すべてのスイッチのFDBのすべてのエントリをエージングし、寿命を過ぎたものを消す。
 
-* flow_mod_and_packet_outメソッド
-```ruby
-  def flow_mod_and_packet_out(packet_in)
-    port_no = @fdbs.fetch(packet_in.dpid).lookup(packet_in.destination_mac)
-    flow_mod(packet_in, port_no) if port_no
-    packet_out(packet_in, port_no || :flood)
-  end
+### 3. host2からhost1にパケットを送信
 ```
-初めに、パケットが到着したスイッチのFDBと宛先MACアドレスから出力先のポート番号を検索する。
-もしポート番号が見つかれば、以降は同じパケットは同様に転送せよ、というフローエントリをスイッチに書き込み、パケットをそのポートに出力する。
-見つからなければ、パケットをフラッディングしてばらまく。
-
-* flow_modメソッド
-```ruby
-  def flow_mod(packet_in, port_no)
-    send_flow_mod_add(
-      packet_in.datapath_id,
-      match: ExactMatch.new(packet_in),
-      actions: SendOutPort.new(port_no)
-    )
-  end
+cookie=0x0, duration=186.683s, table=0, n_packets=0, n_bytes=0, priority=2,dl_dst=01:00:00:00:00:00/ff:00:00:00:00:00 actions=drop
+cookie=0x0, duration=186.646s, table=0, n_packets=0, n_bytes=0, priority=2,dl_dst=33:33:00:00:00:00/ff:ff:00:00:00:00 actions=drop
+cookie=0x0, duration=186.646s, table=0, n_packets=2, n_bytes=84, priority=1 actions=goto_table:1
+cookie=0x0, duration=186.646s, table=1, n_packets=0, n_bytes=0, priority=3,dl_dst=ff:ff:ff:ff:ff:ff actions=FLOOD
+cookie=0x0, duration=2.76s, table=1, n_packets=0, n_bytes=0, idle_timeout=180, priority=2,in_port=2,dl_src=c6:73:74:e5:71:88,dl_dst=ad:4a:5e:6c:b5:20 actions=output:1
+cookie=0x0, duration=186.646s, table=1, n_packets=2, n_bytes=84, priority=1 actions=CONTROLLER:65535
 ```
-Packet Inメッセージとポート番号からスイッチに新しいフローエントリを登録する。
 
-
-* packet_outメソッド
-```ruby
-  def packet_out(packet_in, port_no)
-    send_packet_out(
-      packet_in.datapath_id,
-      packet_in: packet_in,
-      actions: SendOutPort.new(port_no)
-    )
-  end
+### 4. 再びhost1からhost2にパケットを送信
 ```
-Packet Inメッセージから送られてきたパケットの情報を得て、それを指定されたポートに出力する。
-
-### 動作確認
-今回、サンプルとして配布されたtrema.multi.confによって構成されるネットワークを用いて動作確認を行う。そのモデル図を以下に示す。
-
-![](trema.multi1.JPG)
-
-4つのスイッチにそれぞれ2つのホストが接続され、すべてのスイッチが1つのコントローラに接続されている。
-今回、以下のようなシナリオを想定する。
-
-	1. host1-1からhost1-2にパケットを送信する。
-	2. host1-2からhost1-1にパケットを送信する。
-	3. host1-1からhost1-2にパケットを送信する。
-
-
-1. host1-1からhost1-2にパケットを送信する。
-
-スイッチ0x1は未知のパケットが送られてきたので、コントローラにPacket Inを送る。
-![](trema.multi2.JPG)
-コントローラは送信元MACアドレスとポート番号をFDBに登録して、宛先MACアドレスを検索する。
-宛先MACアドレスが見つからなかったので、フラッディングしてパケットをばらまくようにPacket Outを送信する。　
-![](trema.multi3.JPG)
-
-2. host1-2からhost1-1にパケットを送信する。
-
-スイッチ0x1は未知のパケットが送られてきたので、コントローラにPacket Inを送る。
-![](trema.multi4.JPG)
-コントローラは送信元MACアドレスとポート番号をFDBに登録して、宛先MACアドレスを検索する。
-宛先MACアドレスが見つかったので、そのポートにパケットを送るようにPacket Outと、フローテーブルに新しいエントリを登録するためにFlow Modを送信する。
-![](trema.multi5.JPG)
-
-3. host1-1からhost1-2にパケットを送信する。
-
-スイッチ0x1は送られてきたパケットの転送先ポートを知っているので、Packet Inがコントロールまで上がることなく、スイッチ側だけでパケットを転送している。
-![](trema.multi6.JPG)
-
-
-
-
+cookie=0x0, duration=245.165s, table=0, n_packets=0, n_bytes=0, priority=2,dl_dst=01:00:00:00:00:00/ff:00:00:00:00:00 actions=drop
+cookie=0x0, duration=245.128s, table=0, n_packets=0, n_bytes=0, priority=2,dl_dst=33:33:00:00:00:00/ff:ff:00:00:00:00 actions=drop
+cookie=0x0, duration=245.128s, table=0, n_packets=3, n_bytes=126, priority=1 actions=goto_table:1
+cookie=0x0, duration=245.128s, table=1, n_packets=0, n_bytes=0, priority=3,dl_dst=ff:ff:ff:ff:ff:ff actions=FLOOD
+cookie=0x0, duration=61.242s, table=1, n_packets=0, n_bytes=0, idle_timeout=180, priority=2,in_port=2,dl_src=c6:73:74:e5:71:88,dl_dst=ad:4a:5e:6c:b5:20 actions=output:1
+cookie=0x0, duration=3.285s, table=1, n_packets=0, n_bytes=0, idle_timeout=180, priority=2,in_port=1,dl_src=ad:4a:5e:6c:b5:20,dl_dst=c6:73:74:e5:71:88 actions=output:2
+cookie=0x0, duration=245.128s, table=1, n_packets=3, n_bytes=126, priority=1 actions=CONTROLLER:65535
+```
 
